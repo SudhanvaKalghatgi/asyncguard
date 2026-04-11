@@ -1,0 +1,36 @@
+{
+  "name": "asyncguard",
+  "version": "1.0.0",
+  "description": "Production-grade async execution engine with retry, timeout, and observability",
+  "author": "Sudhanva Kalghatgi",
+  "license": "ISC",
+
+  "type": "module",
+
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "dev": "tsup src/index.ts --watch",
+    "test": "vitest",
+    "clean": "rm -rf dist"
+  },
+
+  "keywords": ["async", "retry", "timeout", "typescript", "concurrency"],
+
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}

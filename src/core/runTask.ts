@@ -21,9 +21,17 @@ export async function runTask<T>(
     onEvent,
   } = options;
 
-  if (retry && retry.attempts < 1) {
-    throw new Error("retry.attempts must be >= 1");
+if (retry) {
+  const attempts = retry.attempts;
+
+  if (
+    !Number.isFinite(attempts) ||
+    !Number.isInteger(attempts) ||
+    attempts < 1
+  ) {
+    throw new Error("retry.attempts must be a finite integer >= 1");
   }
+}
 
   let attempt = 0;
 
@@ -82,28 +90,43 @@ export async function runTask<T>(
 
     const maxAttempts = retry?.attempts ?? 1;
 
-    if (attempt >= maxAttempts) {
+if (attempt >= maxAttempts) {
+  if (fallback) {
+    const [fallbackError, fallbackResult] = await safeAwait(
+      fallback(error)
+    );
+
+    if (!fallbackError) {
       emit({
-        type: isTimeout ? "timeout" : "failure",
+        type: "success",
         attempt,
         timestamp: Date.now(),
-        error,
       });
 
-      if (fallback) {
-        const [fallbackError, fallbackResult] = await safeAwait(
-          fallback(error)
-        );
-
-        if (!fallbackError) return fallbackResult as T;
-
-        throw fallbackError;
-      }
-
-      throw error;
+      return fallbackResult as T;
     }
 
-    const delay = calculateBackoffDelay(attempt - 1, retry?.backoff);
+    emit({
+      type: isTimeout ? "timeout" : "failure",
+      attempt,
+      timestamp: Date.now(),
+      error: fallbackError,
+    });
+
+    throw fallbackError;
+  }
+
+  emit({
+    type: isTimeout ? "timeout" : "failure",
+    attempt,
+    timestamp: Date.now(),
+    error,
+  });
+
+  throw error;
+}
+
+    const delay = calculateBackoffDelay(attempt, retry?.backoff);
 
     emit({
       type: "retry",

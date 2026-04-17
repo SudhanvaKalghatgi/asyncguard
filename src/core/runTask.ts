@@ -8,6 +8,10 @@ import { calculateBackoffDelay } from "../utils/retry";
 import { withTimeout } from "../utils/timeout";
 import { safeAwait } from "../utils/safeAwait";
 
+import { RetryExhaustedError } from "../errors/RetryExhaustedError";
+import { TimeoutError } from "../errors/TimeoutError";
+import { CancellationError } from "../errors/CancellationError";
+
 export async function runTask<T>(
   task: Task<T>,
   options: RunTaskOptions<T> = {}
@@ -21,27 +25,32 @@ export async function runTask<T>(
     onEvent,
   } = options;
 
-if (retry) {
-  const attempts = retry.attempts;
+  if (retry) {
+    const attempts = retry.attempts;
 
-  if (
-    !Number.isFinite(attempts) ||
-    !Number.isInteger(attempts) ||
-    attempts < 1
-  ) {
-    throw new Error("retry.attempts must be a finite integer >= 1");
+    if (
+      !Number.isFinite(attempts) ||
+      !Number.isInteger(attempts) ||
+      attempts < 1
+    ) {
+      throw new Error(
+        "retry.attempts must be a finite integer >= 1"
+      );
+    }
   }
-}
 
   let attempt = 0;
 
   const emit = (event: RunTaskEvent) => {
     try {
       onEvent?.(event);
+
       if (debug) {
         console.log("[asyncguard]", event);
       }
-    } catch {}
+    } catch {
+      // observer errors must never break execution
+    }
   };
 
   const startTime = Date.now();
@@ -55,17 +64,20 @@ if (retry) {
   while (true) {
     attempt++;
 
-    // cancellation check
+    const now = Date.now();
+    const elapsed = now - startTime;
+
     if (signal?.aborted) {
       emit({
         type: "cancelled",
         attempt,
-        timestamp: Date.now(),
+        timestamp: now,
       });
 
-      const cancellationError = new Error("Task cancelled");
-      (cancellationError as any).name = "CancellationError";
-      throw cancellationError;
+      throw new CancellationError(
+        attempt,
+        elapsed
+      );
     }
 
     let promise = task();
@@ -74,7 +86,8 @@ if (retry) {
       promise = withTimeout(promise, timeout);
     }
 
-    const [error, result] = await safeAwait(promise);
+    const [error, result] =
+      await safeAwait(promise);
 
     if (!error) {
       emit({
@@ -82,51 +95,103 @@ if (retry) {
         attempt,
         timestamp: Date.now(),
       });
+
       return result as T;
     }
 
     const isTimeout =
-      error instanceof Error && error.message === "Operation timed out";
+      error instanceof TimeoutError ||
+      (error instanceof Error &&
+        error.message ===
+          "Operation timed out");
 
-    const maxAttempts = retry?.attempts ?? 1;
+    const maxAttempts =
+      retry?.attempts ?? 1;
 
-if (attempt >= maxAttempts) {
-  if (fallback) {
-    const [fallbackError, fallbackResult] = await safeAwait(
-      fallback(error)
-    );
+    if (attempt >= maxAttempts) {
+      if (fallback) {
+        const [
+          fallbackError,
+          fallbackResult,
+        ] = await safeAwait(
+          fallback(error)
+        );
 
-    if (!fallbackError) {
+        if (!fallbackError) {
+          emit({
+            type: "success",
+            attempt,
+            timestamp: Date.now(),
+          });
+
+          return fallbackResult as T;
+        }
+
+        const isFallbackTimeout =
+          fallbackError instanceof TimeoutError ||
+          (fallbackError instanceof Error &&
+            fallbackError.message ===
+              "Operation timed out");
+
+        emit({
+          type: isFallbackTimeout
+            ? "timeout"
+            : "failure",
+          attempt,
+          timestamp: Date.now(),
+          error: fallbackError,
+        });
+
+        if (isFallbackTimeout) {
+          throw new TimeoutError(
+            attempt,
+            Date.now() - startTime
+          );
+        }
+
+        if (retry) {
+          throw new RetryExhaustedError(
+            attempt,
+            Date.now() - startTime,
+            fallbackError
+          );
+        }
+
+        throw fallbackError;
+      }
+
       emit({
-        type: "success",
+        type: isTimeout
+          ? "timeout"
+          : "failure",
         attempt,
         timestamp: Date.now(),
+        error,
       });
 
-      return fallbackResult as T;
+      if (isTimeout) {
+        throw new TimeoutError(
+          attempt,
+          Date.now() - startTime
+        );
+      }
+
+      if (retry) {
+        throw new RetryExhaustedError(
+          attempt,
+          Date.now() - startTime,
+          error
+        );
+      }
+
+      throw error;
     }
 
-    emit({
-      type: isTimeout ? "timeout" : "failure",
-      attempt,
-      timestamp: Date.now(),
-      error: fallbackError,
-    });
-
-    throw fallbackError;
-  }
-
-  emit({
-    type: isTimeout ? "timeout" : "failure",
-    attempt,
-    timestamp: Date.now(),
-    error,
-  });
-
-  throw error;
-}
-
-    const delay = calculateBackoffDelay(attempt, retry?.backoff);
+    const delay =
+      calculateBackoffDelay(
+        attempt,
+        retry?.backoff
+      );
 
     emit({
       type: "retry",
@@ -136,6 +201,8 @@ if (attempt >= maxAttempts) {
       error,
     });
 
-    await new Promise((res) => setTimeout(res, delay));
+    await new Promise((resolve) =>
+      setTimeout(resolve, delay)
+    );
   }
 }

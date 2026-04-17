@@ -1,26 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { createPool } from "./pool";
+import { createPool } from "../src";
 
 const sleep = (ms: number) =>
-  new Promise((resolve) =>
-    setTimeout(resolve, ms)
-  );
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("createPool", () => {
   it("should respect concurrency limit", async () => {
-    const pool = createPool({
-      concurrency: 2,
-    });
+    const pool = createPool({ concurrency: 2 });
 
     let running = 0;
     let maxRunning = 0;
 
     const task = async () => {
       running++;
-      maxRunning = Math.max(
-        maxRunning,
-        running
-      );
+      maxRunning = Math.max(maxRunning, running);
 
       await sleep(50);
 
@@ -39,20 +32,15 @@ describe("createPool", () => {
   });
 
   it("should queue tasks and complete all", async () => {
-    const pool = createPool({
-      concurrency: 1,
-    });
+    const pool = createPool({ concurrency: 1 });
 
-    const results =
-      await Promise.all([
-        pool.run(async () => 1),
-        pool.run(async () => 2),
-        pool.run(async () => 3),
-      ]);
-
-    expect(results).toEqual([
-      1, 2, 3,
+    const results = await Promise.all([
+      pool.run(async () => 1),
+      pool.run(async () => 2),
+      pool.run(async () => 3),
     ]);
+
+    expect(results).toEqual([1, 2, 3]);
   });
 
   it("should reject when queue limit is exceeded", async () => {
@@ -70,22 +58,15 @@ describe("createPool", () => {
     const p1 = pool.run(slowTask);
     const p2 = pool.run(slowTask);
 
-    await expect(
-      pool.run(slowTask)
-    ).rejects.toThrow(
+    await expect(pool.run(slowTask)).rejects.toThrow(
       "Queue limit reached"
     );
 
-    await Promise.all([
-      p1,
-      p2,
-    ]);
+    await Promise.all([p1, p2]);
   });
 
   it("should expose stats", async () => {
-    const pool = createPool({
-      concurrency: 2,
-    });
+    const pool = createPool({ concurrency: 2 });
 
     const slowTask = async () => {
       await sleep(50);
@@ -96,21 +77,11 @@ describe("createPool", () => {
     const p2 = pool.run(slowTask);
     const p3 = pool.run(slowTask);
 
-    const stats =
-      pool.stats();
+    const stats = pool.stats();
 
-    expect(
-      stats.activeCount
-    ).toBe(2);
+    expect(stats.activeCount).toBe(2);
+    expect(stats.queuedCount).toBe(1);
 
-    expect(
-      stats.queuedCount
-    ).toBe(1);
-
-    await Promise.all([
-      p1,
-      p2,
-      p3,
-    ]);
+    await Promise.all([p1, p2, p3]);
   });
 });
